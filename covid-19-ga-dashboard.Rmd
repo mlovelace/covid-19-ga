@@ -4,6 +4,8 @@ author: "Matthew Lovelace"
 output: 
   flexdashboard::flex_dashboard:
     orientation: rows
+    social: menu
+    source_code: embed
 runtime: shiny
 ---
 
@@ -42,7 +44,7 @@ for (i in c('orig', 'prep')) {
 # If not, download it and load that.
 
 if (
-  file.exists(here::here('data', 'orig', paste0('cov-us-4pm-daily_', today('EST5EDT'), '.csv'))) == FALSE & hour(now("EST5EDT")) >= 16
+  file.exists(here::here('data', 'orig', paste0('cov-us-4pm-daily_', today('EST5EDT'), '.csv'))) == FALSE & hour(now("EST5EDT")) >= 17
 ) {
   
   df <- read.csv('http://covidtracking.com/api/states/daily.csv')

@@ -5,8 +5,8 @@ account: matthew-lovelace
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 1989240
-bundleId: 2919378
+bundleId: 2919763
 url: https://edmetrica.shinyapps.io/covid-19-ga-dashboard/
-when: 1585075650.30212
+when: 1585081042.57208
 asMultiple: FALSE
 asStatic: FALSE
