@@ -1,0 +1,12 @@
+name: covid-19-ga-dashboard
+title: covid-19-ga-dashboard
+username:
+account: matthew-lovelace
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 1989240
+bundleId: 2919378
+url: https://edmetrica.shinyapps.io/covid-19-ga-dashboard/
+when: 1585075650.30212
+asMultiple: FALSE
+asStatic: FALSE

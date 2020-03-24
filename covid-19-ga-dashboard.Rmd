@@ -1,0 +1,361 @@
+---
+title: "COVID-19 in Georgia"
+author: "Matthew Lovelace"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(forcats)
+library(lubridate)
+library(ggplot2)
+library(glue)
+library(plotly)
+library(xml2)
+library(rvest)
+```
+
+```{r load-and-prep-data, include=FALSE}
+
+## daily data for GA ##
+
+# source: COVID Tracking Project
+
+# make data/orig & data/prep folders
+for (i in c('orig', 'prep')) {
+  if (dir.exists(here::here('data', i)) == FALSE) {
+    dir.create(here::here('data', i), recursive = TRUE)
+  }
+}
+
+# if no dataset already stored for today and it is after 4pm EST/EDT,
+# download the lastest COVID Tracking 4pm Daily dataset and load that.
+# if the data for today is already there, load that.
+# if the data is not there for today and it is before 4pm EST/EDT, check
+# if yesterday's data is already downloaded. If so, load that.
+# If not, download it and load that.
+
+if (
+  file.exists(here::here('data', 'orig', paste0('cov-us-4pm-daily_', today('EST5EDT'), '.csv'))) == FALSE & hour(now("EST5EDT")) >= 16
+) {
+  
+  df <- read.csv('http://covidtracking.com/api/states/daily.csv')
+  
+  write.csv(df,
+            here::here('data', 'orig', paste0('cov-us-4pm-daily_', today('EST5EDT'), '.csv')))
+  
+  saveRDS(df,
+          here::here('data', 'prep', paste0('cov-us-4pm-daily_', today('EST5EDT'), '.rds')))
+  
+} else if (
+  file.exists(here::here('data', 'prep', paste0('cov-us-4pm-daily_', today('EST5EDT'), '.rds'))) == TRUE
+) {
+  
+  df <- readRDS(here::here('data', 'prep', paste0('cov-us-4pm-daily_', today('EST5EDT'), '.rds')))
+  
+} else if (
+  file.exists(here::here('data', 'orig', paste0('cov-us-4pm-daily_', today('EST5EDT') - 1, '.csv'))) == FALSE
+) {
+  
+  df <- read.csv('http://covidtracking.com/api/states/daily.csv')
+  
+  write.csv(df,
+            here::here('data', 'orig', paste0('cov-us-4pm-daily_', today('EST5EDT') - 1, '.csv')))
+  
+  saveRDS(df,
+          here::here('data', 'prep', paste0('cov-us-4pm-daily_', today('EST5EDT') - 1, '.rds')))
+} else if (
+  file.exists(here::here('data', 'prep', paste0('cov-us-4pm-daily_', today('EST5EDT') - 1, '.rds'))) == TRUE
+) {
+  
+  df <- readRDS(here::here('data', 'prep', paste0('cov-us-4pm-daily_', today('EST5EDT') - 1, '.rds')))
+  
+} 
+
+cov_us_4pm_daily <- df
+rm(df)
+
+cov_ga <- cov_us_4pm_daily %>% 
+  rename_all(list(~ str_to_lower(.))) %>% 
+  rename(st = state,
+         dt = date,
+         pos = positive,
+         neg = negative,
+         tests = total,
+         deaths = death) %>% 
+  select(st, dt, tests, pos, neg, deaths) %>% 
+  filter(st == "GA") %>% 
+  mutate(dt = ymd(as.character(dt))) %>% 
+  mutate(tests = if_else(dt < ymd('2020-03-18'),
+                         NA_integer_,
+                         tests)) %>% 
+  mutate(deaths = if_else(is.na(deaths), 0, as.double(deaths))) %>% 
+  arrange(dt) %>% 
+  mutate(new_cases = if_else(row_number() == 1,
+                             pos,
+                             pos - lag(pos)),
+         new_deaths = if_else(row_number() == 1,
+                              deaths,
+                              deaths - lag(deaths))) %>% 
+  mutate_at(vars(tests, pos, neg, deaths, new_cases, new_deaths),
+            list(~ as.numeric(.)))
+  
+
+## current pop. total for GA ##
+
+# source: U.S. Census Bureau
+
+pop_ga <- readxl::read_excel("data/orig/nst-est2019-01.xlsx", 
+    skip = 3) %>% 
+  rename(st = `...1`,
+         pop_est = `2019`) %>% 
+  select(st, pop_est) %>% 
+  filter(st == '.Georgia') %>% 
+  .$pop_est
+
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Daily total (line) and new (bar) COVID-19 cases in Georgia
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, new_cases, pos) %>% 
+  pivot_longer(
+    cols = -dt,
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(data = df %>% filter(var == "new_cases"), stat = 'identity') +
+  geom_line(data = df %>% filter(var == "pos"))  +
+  geom_point(data = df %>% filter(var == "pos")) +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+-----------------------------------------------------------------------
+
+### Daily Percent Change in Positives vs Total Tested
+
+```{r}
+
+df <- cov_ga %>% 
+  filter(dt >= ymd('2020-03-18')) %>% 
+  select(dt, tests, pos) %>% 
+  pivot_longer(
+    cols = -dt,
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-18'), 
+                            glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                            glue('{format(val, big.mark = ",")}'))) %>% 
+  filter(dt >= ymd('2020-03-19'))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = pct_chg, color = var, label = N)) +
+  geom_point() +
+  geom_line() +
+  #geom_text(aes(label = gg_label), position = position_nudge(y = 100)) +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, 100)) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "label"))
+
+```
+
+Row
+------------------------------------------------------------
+### Percent of Population Tested
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, tests) %>% 
+  arrange(dt) %>% 
+  filter(row_number() == nrow(cov_ga)) %>% 
+  rename(tested = tests) %>% 
+  mutate(not_tested = pop_ga - tested,
+         pct_tested = tested/pop_ga*100) %>% 
+  pivot_longer(
+    cols = -c(dt, pct_tested),
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  mutate(lab = case_when(pct_tested < 1 & var == 'tested' ~ 
+                           glue('<1% of Georgians have been tested
+                           for COVID-19
+                           ({format(val, trim = TRUE, big.mark = ",")} out of {format(pop_ga, big.mark = ",")})'),
+                         pct_tested >= 1 & var == 'tested' ~ 
+                           glue('{pct_tested}% of Georgians have been tested
+                           for COVID-19
+                           ({format(val, trim = TRUE, big.mark = ",")} out of {format(pop_ga, big.mark = ",")})'),
+                         TRUE ~ '')) %>% 
+  mutate(fraction = val/sum(val),
+         ymax = cumsum(fraction),
+         ymin = lag(ymax, default = 0),
+         lab_position = (ymin + ymax)/2) 
+  
+
+# donut chart
+library(ggrepel)
+
+gg <- ggplot(df, aes(ymax=ymax, ymin=ymin, xmax=4, xmin=3, fill=var)) +
+  geom_rect() +
+  #geom_text(x=2, aes(y=lab_position, label=lab, color=var), size=4) + # x here controls label position (inner / outer)
+  geom_text_repel(x = 3.5, aes(y = lab_position, label = lab),
+                  nudge_x = -3.75,
+                  nudge_y = 0.03) +
+                  #direction    = "x",
+                  #vjust        = 1.0) +
+                  #segment.size = 0.2) +
+  scale_fill_brewer(palette= "Greys", direction = 1) +
+  scale_color_brewer(palette="Greys", direction = 1) +
+  coord_polar(theta="y") +
+  xlim(c(-1, 4)) +
+  theme_void() +
+  theme(legend.position = "none")
+
+gg
+
+
+
+```
+
+
+
+### How many Georgians have died from COVID-19? Are probably still sick? Have probably recovered by now?
+
+```{r}
+
+# Assumes 21 days to recovery for 80%, 32 days for 20%
+
+days_to_recovery_mld <- 21
+days_to_recovery_sev <- 32
+
+# Assumes 4.4% ICU rate
+
+icu_rate = 0.044
+
+# assumes 20.8% hospitalization rate
+
+hosp_rate = 0.208
+
+# hospital beds in GA (assume 66% already occupied, probably a low estimate)
+
+hosp_beds = 22344 * .333
+
+icu_beds = 2900 * .666
+
+outcomes <- cov_ga %>% 
+  mutate(today = if_else(hour(now('EST5EDT')) >= 16, today("EST5EDT"), today('EST5EDT') - 1),
+         days_since = as.numeric(today - dt),
+         recovered = case_when(days_since <= days_to_recovery_mld  ~ 0,
+                              days_since > days_to_recovery_mld & days_since <= days_to_recovery_sev ~ 0.8*new_cases,
+                              days_since > days_to_recovery_sev ~ new_cases)) %>% 
+  mutate(recovered = cumsum(recovered - new_deaths),
+         recovered = if_else(recovered < 0, 0, recovered),
+         sick = pos - recovered - deaths,
+         died = deaths,
+         hospitalized = sick * hosp_rate,
+         icu = sick * icu_rate) %>% 
+  mutate(avail_hosp_beds = hosp_beds - hospitalized,
+         avail_icu = icu_beds - icu)
+
+df <- outcomes %>% 
+  select(dt, sick, recovered, died) %>% 
+  pivot_longer(
+    cols = -dt,
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(round(val), trim = FALSE, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(round(val), trim = FALSE, big.mark = ",")}')))
+
+df <- df %>% 
+  mutate(var = fct_relevel(var, c('sick', 'recovered', 'died')))
+
+
+gg <- ggplot(df, aes(x=dt, y=val, fill=var, label = N)) + 
+  geom_area(alpha=0.6 , size=.5, colour="white") +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "label"))
+
+
+```
+
+
+### Estimated current need for hospitalization vs availability
+
+```{r}
+
+df <- outcomes %>% 
+  select(dt, hospitalized, icu, avail_hosp_beds, avail_icu) %>% 
+  pivot_longer(
+    cols = -dt,
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(round(val), trim = FALSE, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(round(val), trim = FALSE, big.mark = ",")}')))
+
+
+
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, color = var, label = N)) +
+  geom_line() +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val)*1.1)) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "label"))
+
+```
