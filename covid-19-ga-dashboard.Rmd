@@ -19,8 +19,6 @@ library(lubridate)
 library(ggplot2)
 library(glue)
 library(plotly)
-library(xml2)
-library(rvest)
 ```
 
 ```{r load-and-prep-data, include=FALSE}
@@ -83,21 +81,37 @@ if (
 cov_us_4pm_daily <- df
 rm(df)
 
-cov_ga <- cov_us_4pm_daily %>% 
+cov_us <- cov_us_4pm_daily %>% 
   rename_all(list(~ str_to_lower(.))) %>% 
-  rename(st = state,
-         dt = date,
+  rename(dt = date,
+         st = state,
          pos = positive,
          neg = negative,
-         tests = total,
+         hosp = hospitalized,
          deaths = death) %>% 
-  select(st, dt, tests, pos, neg, deaths) %>% 
+  mutate(dt = ymd(as.character(dt))) %>%
+  mutate(deaths = if_else(is.na(deaths), 0, as.double(deaths)))
+
+cov_ga <- cov_us %>% 
   filter(st == "GA") %>% 
-  mutate(dt = ymd(as.character(dt))) %>% 
+  rename(tests = totaltestresults) %>% 
   mutate(tests = if_else(dt < ymd('2020-03-18'),
                          NA_integer_,
-                         tests)) %>% 
-  mutate(deaths = if_else(is.na(deaths), 0, as.double(deaths))) %>% 
+                         tests))
+
+ck <- cov_ga %>% filter(dt >= ymd('2020-03-18'))
+
+assertthat::assert_that(all(ck$pos + ck$neg == ck$tests))
+
+cov_ga <- cov_ga %>%   
+  #Calculate days since 100th case
+  arrange(dt) %>% 
+  mutate(at_least_100 = pos >= 100) %>% 
+  group_by(at_least_100) %>% 
+  mutate(days_since_100 = if_else(at_least_100 == TRUE, row_number(), NA_integer_)) %>%
+  ungroup()
+
+cov_ga <- cov_ga %>% 
   arrange(dt) %>% 
   mutate(new_cases = if_else(row_number() == 1,
                              pos,
@@ -108,30 +122,98 @@ cov_ga <- cov_us_4pm_daily %>%
   mutate_at(vars(tests, pos, neg, deaths, new_cases, new_deaths),
             list(~ as.numeric(.)))
   
+cov_ga <- cov_ga %>% 
+  select(dt, days_since_100, st,
+         pos, neg, tests,
+         hosp, deaths,
+         new_cases, new_deaths)
 
 ## current pop. total for GA ##
 
 # source: U.S. Census Bureau
 
-pop_ga <- readxl::read_excel("data/orig/nst-est2019-01.xlsx", 
+pop_us <- readxl::read_excel("data/orig/nst-est2019-01.xlsx", 
     skip = 3) %>% 
-  rename(st = `...1`,
+  rename(state = `...1`,
          pop_est = `2019`) %>% 
-  select(st, pop_est) %>% 
-  filter(st == '.Georgia') %>% 
+  select(state, pop_est) %>% 
+  filter(str_detect(state, "[.]") & !is.na(pop_est)) %>% 
+  mutate(state = str_replace(state, "[.]", ""))
+
+states <- data.frame(
+  state = state.name,
+  st = state.abb
+) %>% 
+  mutate_at(vars(state, st),
+            list(~ as.character(.)))
+
+pop_us <- pop_us %>% 
+  full_join(states,
+            by = "state") %>% 
+  mutate(st = if_else(state == 'District of Columbia', 'DC', st))
+
+pop_ga <- pop_us %>%
+  filter(st == 'GA') %>% 
   .$pop_est
 
+
+## dates GA schools closed ##
+
+ga_sch_closed <- tribble(
+  ~from,         ~to,
+  "2020-03-18", NA
+)
+
+
 ```
+
+
+Cases
+=======================================================================
 
 Row
 -----------------------------------------------------------------------
 
-### Daily total (line) and new (bar) COVID-19 cases in Georgia
+### Daily cumulative total of positive COVID-19 cases in Georgia (since March 4th)
 
 ```{r}
 
 df <- cov_ga %>% 
-  select(dt, new_cases, pos) %>% 
+  select(dt, pos) %>% 
+  pivot_longer(
+    cols = -dt,  
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+> Sources: [The COVID Tracking Project](https://covidtracking.com/api/), [GA DPH](https://dph.georgia.gov/covid-19-daily-status-report)
+
+### New positive COVID-19 cases in Georgia by date (since March 4th)
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, new_cases) %>% 
   pivot_longer(
     cols = -dt,
     names_to = 'var',
@@ -148,9 +230,7 @@ df <- cov_ga %>%
 
 gg <- ggplot(data = df,
               aes(x = dt, y = val, label = N)) +
-  geom_bar(data = df %>% filter(var == "new_cases"), stat = 'identity') +
-  geom_line(data = df %>% filter(var == "pos"))  +
-  geom_point(data = df %>% filter(var == "pos")) +
+  geom_bar(stat = 'identity') +
   scale_x_date(expand = c(0, 0.5)) + 
   scale_y_continuous(limits = c(0, max(df$val))) +
   theme_minimal()
@@ -160,9 +240,52 @@ ggplotly(gg,
 
 ```
 
+> Sources: [The COVID Tracking Project](https://covidtracking.com/api/), [GA DPH](https://dph.georgia.gov/covid-19-daily-status-report)
+
+
+
+
+Testing
+=======================================================================
+
+Row
 -----------------------------------------------------------------------
 
-### Daily Percent Change in Positives vs Total Tested
+### Total Tests by Date
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, tests) %>% 
+  filter(!is.na(tests)) %>% 
+  pivot_longer(
+    cols = -dt,
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+
+### Day-to-Day Percent Change: Total Cases vs Total Tested
 
 ```{r}
 
@@ -198,8 +321,10 @@ ggplotly(gg,
 
 ```
 
+
 Row
-------------------------------------------------------------
+-----------------------------------------------------------------------
+
 ### Percent of Population Tested
 
 ```{r}
@@ -257,14 +382,206 @@ gg
 ```
 
 
+### Tests Per Million
 
-### How many Georgians have died from COVID-19? Are probably still sick? Have probably recovered by now?
+```{r}
+
+df <- cov_us %>% 
+  filter(!is.na(neg)) %>% 
+  mutate(tests = pos + neg) %>% 
+  mutate(st = as.character(st)) %>% 
+  select(st, dt, tests) %>% 
+  full_join(pop_us,
+            by = 'st') %>% 
+  filter(!is.na(state)) %>% 
+  ## calc tests per million ##
+  mutate(val = round(tests*1000000/pop_est))
+  
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = st, group = factor(st))) +
+  geom_line(data = df %>% filter(st != "GA"), color = "grey90") +
+  geom_line(data = df %>% filter(st == "GA"), color = "dodgerblue") +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  ylab("Tests per Million Residents") +
+  xlab("Date") +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("st", "dt", "val"))
+
+
+
+```
+
+
+Hospitalizations
+=======================================================================
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### Total
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, hosp) %>% 
+  filter(!is.na(hosp)) %>% 
+  pivot_longer(
+    cols = -dt,  
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+
+### New
+
+```{r}
+
+df <- cov_ga %>% 
+  filter(!is.na(hosp)) %>% 
+  mutate(new = if_else(row_number() == 1,
+                             hosp,
+                             hosp - lag(hosp))) %>% 
+  select(dt, new) %>% 
+  pivot_longer(
+    cols = -dt,
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+
+
+Deaths
+=======================================================================
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### Total
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, deaths) %>% 
+  pivot_longer(
+    cols = -dt,  
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+
+### New
+
+```{r}
+
+df <- cov_ga %>%  
+  select(dt, new_deaths) %>% 
+  pivot_longer(
+    cols = -dt,
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+
+
+
+
+Current Status
+=======================================================================
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### COVID-19 Population Status
 
 ```{r}
 
 # Assumes 21 days to recovery for 80%, 32 days for 20%
 
-days_to_recovery_mld <- 21
+days_to_recovery_mld <- 14
 days_to_recovery_sev <- 32
 
 # Assumes 4.4% ICU rate
@@ -361,3 +678,5 @@ ggplotly(gg,
          tooltip = c("dt", "label"))
 
 ```
+
+
