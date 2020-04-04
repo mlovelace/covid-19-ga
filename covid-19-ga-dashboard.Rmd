@@ -41,11 +41,12 @@ for (i in c('orig', 'prep')) {
 # if yesterday's data is already downloaded. If so, load that.
 # If not, download it and load that.
 
+
 if (
   file.exists(here::here('data', 'orig', paste0('cov-us-4pm-daily_', today('EST5EDT'), '.csv'))) == FALSE & hour(now("EST5EDT")) >= 17
 ) {
   
-  df <- read.csv('http://covidtracking.com/api/states/daily.csv')
+  df <- read.csv('https://covidtracking.com/api/v1/states/daily.csv')
   
   write.csv(df,
             here::here('data', 'orig', paste0('cov-us-4pm-daily_', today('EST5EDT'), '.csv')))
@@ -166,82 +167,6 @@ ga_sch_closed <- tribble(
 
 
 ```
-
-
-Cases
-=======================================================================
-
-Row
------------------------------------------------------------------------
-
-### Daily cumulative total of positive COVID-19 cases in Georgia (since March 4th)
-
-```{r}
-
-df <- cov_ga %>% 
-  select(dt, pos) %>% 
-  pivot_longer(
-    cols = -dt,  
-    names_to = 'var',
-    values_to = 'val'
-  ) %>% 
-  arrange(dt) %>% 
-  group_by(var) %>% 
-  mutate(diff = val - lag(val),
-         pct_chg = diff/lag(val)*100) %>% 
-  ungroup() %>% 
-  mutate(N = if_else(dt > ymd('2020-03-04'), 
-                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
-                     glue('{format(val, big.mark = ",")}')))
-
-gg <- ggplot(data = df,
-              aes(x = dt, y = val, label = N)) +
-  geom_bar(stat = 'identity') +
-  scale_x_date(expand = c(0, 0.5)) + 
-  scale_y_continuous(limits = c(0, max(df$val))) +
-  theme_minimal()
-
-ggplotly(gg,
-         tooltip = c("dt", "N"))
-
-```
-
-> Sources: [The COVID Tracking Project](https://covidtracking.com/api/), [GA DPH](https://dph.georgia.gov/covid-19-daily-status-report)
-
-### New positive COVID-19 cases in Georgia by date (since March 4th)
-
-```{r}
-
-df <- cov_ga %>% 
-  select(dt, new_cases) %>% 
-  pivot_longer(
-    cols = -dt,
-    names_to = 'var',
-    values_to = 'val'
-  ) %>% 
-  arrange(dt) %>% 
-  group_by(var) %>% 
-  mutate(diff = val - lag(val),
-         pct_chg = diff/lag(val)*100) %>% 
-  ungroup() %>% 
-  mutate(N = if_else(dt > ymd('2020-03-04'), 
-                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
-                     glue('{format(val, big.mark = ",")}')))
-
-gg <- ggplot(data = df,
-              aes(x = dt, y = val, label = N)) +
-  geom_bar(stat = 'identity') +
-  scale_x_date(expand = c(0, 0.5)) + 
-  scale_y_continuous(limits = c(0, max(df$val))) +
-  theme_minimal()
-
-ggplotly(gg,
-         tooltip = c("dt", "N"))
-
-```
-
-> Sources: [The COVID Tracking Project](https://covidtracking.com/api/), [GA DPH](https://dph.georgia.gov/covid-19-daily-status-report)
-
 
 
 
@@ -414,6 +339,83 @@ ggplotly(gg,
 
 
 ```
+
+
+Cases
+=======================================================================
+
+Row
+-----------------------------------------------------------------------
+
+### Daily cumulative total of positive COVID-19 cases in Georgia (since March 4th)
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, pos) %>% 
+  pivot_longer(
+    cols = -dt,  
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+> Sources: [The COVID Tracking Project](https://covidtracking.com/api/), [GA DPH](https://dph.georgia.gov/covid-19-daily-status-report)
+
+### New positive COVID-19 cases in Georgia by date (since March 4th)
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, new_cases) %>% 
+  pivot_longer(
+    cols = -dt,
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+> Sources: [The COVID Tracking Project](https://covidtracking.com/api/), [GA DPH](https://dph.georgia.gov/covid-19-daily-status-report)
+
+
 
 
 Hospitalizations
