@@ -129,6 +129,40 @@ cov_ga <- cov_ga %>%
          hosp, deaths,
          new_cases, new_deaths)
 
+# Calculate 7-day rolling avgs
+
+for (var in c('tests', 'pos', 'new_cases', 'hosp', 'deaths')) {
+  for (i in 1:6) {
+    cov_ga <- cov_ga %>% 
+      arrange(dt) %>% 
+      mutate(!! paste0(var, '_lag_', i) := lag(get(var), i))
+  }
+}
+
+df <- cov_ga %>% 
+  select(dt, tests, pos, new_cases, hosp, deaths, contains('_lag_')) %>% 
+  rename_at(vars(tests, pos, new_cases, hosp, deaths),
+            list(~ paste0(., "_lag_0"))) %>% 
+  pivot_longer(cols = contains("_lag_"),
+               names_to = "var",
+               values_to = "val") %>% 
+  arrange(dt, var) %>% 
+  mutate(var = str_sub(var, end = -7)) %>% 
+  group_by(dt, var) %>% 
+  mutate(`_7dra` = mean(val, na.rm = FALSE)) %>% 
+  ungroup() %>% 
+  distinct(dt, var, .keep_all = TRUE) %>% 
+  select(dt, var, `_7dra`) %>% 
+  pivot_wider(names_from = var,
+              values_from = `_7dra`) %>% 
+  rename_at(vars(deaths:tests),
+            list(~ paste0(., '_7dra')))
+  
+cov_ga <- cov_ga %>% 
+  left_join(df, by = 'dt')
+
+
+
 ## current pop. total for GA ##
 
 # source: U.S. Census Bureau
@@ -415,6 +449,78 @@ ggplotly(gg,
 
 > Sources: [The COVID Tracking Project](https://covidtracking.com/api/), [GA DPH](https://dph.georgia.gov/covid-19-daily-status-report)
 
+
+
+Row
+-----------------------------------------------------------------------
+
+### 7-day rolling average of cumulative total of positive COVID-19 cases in Georgia (since March 4th)
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, pos_7dra) %>% 
+  pivot_longer(
+    cols = -dt,  
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+> Sources: [The COVID Tracking Project](https://covidtracking.com/api/), [GA DPH](https://dph.georgia.gov/covid-19-daily-status-report)
+
+### 7-day rolling average of new positive COVID-19 cases in Georgia by date (since March 4th)
+
+```{r}
+
+df <- cov_ga %>% 
+  select(dt, new_cases_7dra) %>% 
+  pivot_longer(
+    cols = -dt,
+    names_to = 'var',
+    values_to = 'val'
+  ) %>% 
+  arrange(dt) %>% 
+  group_by(var) %>% 
+  mutate(diff = val - lag(val),
+         pct_chg = diff/lag(val)*100) %>% 
+  ungroup() %>% 
+  mutate(N = if_else(dt > ymd('2020-03-04'), 
+                     glue('{format(val, big.mark = ",")} ({if_else(sign(diff) >= 0, "+", "-")}{round(pct_chg, 1)}%)'),
+                     glue('{format(val, big.mark = ",")}')))
+
+gg <- ggplot(data = df,
+              aes(x = dt, y = val, label = N)) +
+  geom_bar(stat = 'identity') +
+  scale_x_date(expand = c(0, 0.5)) + 
+  scale_y_continuous(limits = c(0, max(df$val))) +
+  theme_minimal()
+
+ggplotly(gg,
+         tooltip = c("dt", "N"))
+
+```
+
+> Sources: [The COVID Tracking Project](https://covidtracking.com/api/), [GA DPH](https://dph.georgia.gov/covid-19-daily-status-report)
 
 
 
